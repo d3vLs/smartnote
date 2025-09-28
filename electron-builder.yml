@@ -1,0 +1,35 @@
+appId: com.smartnote.desktop
+productName: SmartNote
+files:
+  - 'build/main/**/*'
+  - 'build/preload/**/*'
+  - 'dist/**/*'
+  - 'package.json'
+directories:
+  output: 'release'
+  buildResources: 'buildResources'
+extraMetadata:
+  main: 'build/main/main.js'
+asar: true
+extraResources:
+  - from: 'assets'
+    to: 'assets'
+win:
+  target:
+    - nsis
+  artifactName: '${productName}-Setup-${version}.${ext}'
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+linux:
+  target:
+    - AppImage
+  category: Office
+publish: null

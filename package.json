@@ -1,0 +1,46 @@
+{
+  "name": "smartnote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SmartNote desktop app (ElectronJS + React + SQLite)",
+  "main": "build/main/main.js",
+  "author": "SmartNote Team",
+  "license": "MIT",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:renderer": "vite",
+    "dev:main": "tsc -w -p tsconfig.main.json",
+    "dev:preload": "tsc -w -p tsconfig.preload.json",
+    "dev": "concurrently -k \"npm:dev:*\" \"wait-on tcp:5173 && electron .\"",
+    "build:renderer": "vite build",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:preload": "tsc -p tsconfig.preload.json",
+    "build": "npm run build:renderer && npm run build:main && npm run build:preload && electron-builder",
+    "start": "electron .",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier -w ."
+  },
+  "keywords": [],
+  "dependencies": {
+    "better-sqlite3": "^12.4.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.15",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "electron-builder": "^26.0.12",
+    "electron": "^38.2.0",
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}
