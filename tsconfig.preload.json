@@ -3,14 +3,18 @@
     "target": "ES2020",
     "module": "CommonJS",
     "lib": ["ES2020", "DOM"],
-    "outDir": "build/preload",
-    "rootDir": "app/preload",
+    "outDir": "build",
+    "rootDir": "app",
     "strict": true,
     "moduleResolution": "Node",
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@common/*": ["app/common/*"]
+    }
   },
-  "include": ["app/preload/**/*"]
+  "include": ["app/preload/**/*", "app/common/**/*"]
 }
