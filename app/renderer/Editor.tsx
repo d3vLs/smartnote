@@ -42,6 +42,7 @@ export function Editor({
   useEffect(() => {
     (async () => setFolders(await window.api.listFolders()))();
   }, []);
+
   useEffect(() => {
     (async () => {
       if (noteId) {
@@ -82,31 +83,48 @@ export function Editor({
     const { width, height } = ctx.canvas;
     ctx.clearRect(0, 0, width, height);
 
-    // Draw committed strokes
-    for (const s of strokes) {
-      if (!s || !s.points?.length) continue;
+    // draw all strokes
+    for (let i = 0; i < strokes.length; i++) {
+      const s = strokes[i];
+      if (!s?.points?.length) continue;
       ctx.strokeStyle = s.color ?? '#222';
       ctx.lineWidth = s.width ?? 2;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.beginPath();
-      s.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      s.points.forEach((p, j) => (j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.stroke();
     }
 
-    // Draw in-progress stroke
-    if (drawing.current && drawing.current.points.length) {
+    // draw in-progress stroke
+    if (drawing.current?.points?.length) {
       const s = drawing.current;
       ctx.strokeStyle = s.color;
       ctx.lineWidth = s.width;
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
       ctx.beginPath();
-      s.points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      s.points.forEach((p, j) => (j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.stroke();
     }
 
-    // Draw selection rectangle
+    // highlight selected strokes on top
+    if (selectedIdx.length) {
+      ctx.save();
+      ctx.strokeStyle = '#0a84ff';
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.6;
+      for (const i of selectedIdx) {
+        const s = strokes[i];
+        if (!s?.points?.length) continue;
+        ctx.beginPath();
+        s.points.forEach((p, j) => (j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // draw selection rectangle only while dragging
     if (selectionRect) {
       ctx.save();
       ctx.strokeStyle = '#0a84ff';
@@ -116,9 +134,25 @@ export function Editor({
       ctx.restore();
     }
   }
+
   useEffect(() => {
     repaint();
   }, [strokes, selectionRect]);
+
+  // Initialize canvas with DPR scaling once
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cssWidth = canvas.clientWidth || 800;
+    const cssHeight = canvas.clientHeight || 600;
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.scale(dpr, dpr);
+    repaint();
+    // re-run on resize if needed
+  }, []);
 
   // Keyboard nudge
   useEffect(() => {
@@ -152,15 +186,43 @@ export function Editor({
       h = Math.abs(a.y - b.y);
     return { x, y, w, h };
   }
+  // function strokeInRect(s: Stroke, r: { x: number; y: number; w: number; h: number }) {
+  //   return s.points.some((p) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h);
+  // }
+  // function toCanvasPoint(e: React.MouseEvent) {
+  //   const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+  //   return { x: e.clientX - rect.left, y: e.clientY - rect.top, t: Date.now() };
+  // }
+
   function strokeInRect(s: Stroke, r: { x: number; y: number; w: number; h: number }) {
-    return s.points.some((p) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h);
+    const pad = Math.max(4, s.width ?? 2);
+    const rx = r.x - pad,
+      ry = r.y - pad,
+      rw = r.w + pad * 2,
+      rh = r.h + pad * 2;
+    return s.points.some((p) => p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh);
   }
+
   function toCanvasPoint(e: React.MouseEvent) {
-    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top, t: Date.now() };
+    const canvas = e.target as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
+    // scale to canvas logical coordinates (which we draw in CSS pixels after ctx.scale)
+    return { x: cssX, y: cssY, t: Date.now() };
+  }
+
+  function eraseAt(p: { x: number; y: number }) {
+    const radius = 6;
+    setStrokes((prev) =>
+      prev.filter((s) => !s.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < radius))
+    );
+    repaint();
   }
 
   // Canvas handlers
+  const erasing = useRef(false);
+
   const onCanvasMouseDown = (e: React.MouseEvent) => {
     const p = toCanvasPoint(e);
 
@@ -177,12 +239,18 @@ export function Editor({
     }
 
     if (tool === 'erase') {
-      const radius = 6;
-      setStrokes((prev) =>
-        prev.filter((s) => !s.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < radius))
-      );
+      erasing.current = true;
+      eraseAt(p);
       return;
     }
+
+    // if (tool === 'erase') {
+    //   const radius = 6;
+    //   setStrokes((prev) =>
+    //     prev.filter((s) => !s.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < radius))
+    //   );
+    //   return;
+    // }
   };
 
   const onCanvasMouseMove = (e: React.MouseEvent) => {
@@ -196,6 +264,11 @@ export function Editor({
 
     if (tool === 'select' && dragStart.current) {
       setSelectionRect(rectFromPoints(dragStart.current, p));
+      return;
+    }
+
+    if (tool === 'erase' && erasing.current) {
+      eraseAt(p);
       return;
     }
   };
@@ -213,8 +286,10 @@ export function Editor({
         if (strokeInRect(s, selectionRect)) idx.push(i);
       });
       setSelectedIdx(idx);
-      dragStart.current = null;
+      setSelectionRect(null); // hide box after selection
+      repaint();
     }
+    if (tool === 'erase') erasing.current = false;
   };
 
   // Save note
