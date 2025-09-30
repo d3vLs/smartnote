@@ -1,10 +1,100 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'node:path';
 import { openDb } from '../repo/db';
 import { migrate } from '../repo/schema';
 import { TagRepository } from '../repo/tags';
 import { FolderRepository } from '../repo/folders';
 import { NoteService } from '../services/notes';
+import fs from 'node:fs';
+
+// Helper to construct data URL
+function makeExportHTMLDataURL({
+  title,
+  items,
+  crop,
+}: {
+  title: string;
+  items: any[];
+  crop: { x: number; y: number; w: number; h: number };
+}) {
+  const escaped = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escaped(title || 'Note')}</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .page { width: ${crop.w}px; height: ${crop.h}px; }
+    canvas { width: ${crop.w}px; height: ${crop.h}px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <canvas id="c" width="${crop.w}" height="${crop.h}"></canvas>
+  </div>
+  <script>
+    const items = ${JSON.stringify(items)};
+    const crop = ${JSON.stringify(crop)};
+    const c = document.getElementById('c');
+    const ctx = c.getContext('2d');
+
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0,0,c.width,c.height);
+
+    function draw() {
+      for (const it of items) {
+        if (it.kind === 'stroke') {
+          if (!it.points || !it.points.length) continue;
+          ctx.strokeStyle = it.color || '#222';
+          ctx.lineWidth = it.width || 2;
+          ctx.lineJoin = 'round';
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          for (let i=0;i<it.points.length;i++) {
+            const p = it.points[i];
+            const x = p.x - crop.x;
+            const y = p.y - crop.y;
+            if (i===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        } else if (it.kind === 'text') {
+          ctx.save();
+          ctx.font = it.font || '16px system-ui, sans-serif';
+          ctx.fillStyle = it.color || '#222';
+          ctx.textAlign = it.align || 'left';
+          const lineHeight = parseInt(it.font) * 1.3 || 20;
+          const words = (it.text || '').split(/\\s+/);
+          let line = '', y = (it.y - crop.y) + lineHeight;
+          const left = it.x - crop.x;
+          const w = it.w;
+          const startX = it.align === 'center' ? left + w/2 : (it.align === 'right' ? left + w : left);
+          for (const word of words) {
+            const test = line ? line + ' ' + word : word;
+            const m = ctx.measureText(test);
+            if (m.width > w && line) {
+              ctx.fillText(line, startX, y);
+              line = word;
+              y += lineHeight;
+              if (y > (it.y - crop.y) + it.h) break;
+            } else {
+              line = test;
+            }
+          }
+          if (y <= (it.y - crop.y) + it.h) ctx.fillText(line, startX, y);
+          ctx.restore();
+        }
+      }
+    }
+    draw();
+  </script>
+</body>
+</html>
+`;
+  const encoded = Buffer.from(html, 'utf8').toString('base64');
+  return `data:text/html;base64,${encoded}`;
+}
 
 let win: BrowserWindow | null = null;
 
@@ -48,6 +138,51 @@ async function bootstrap() {
   noteService = new NoteService();
   tagsRepo = new TagRepository();
   foldersRepo = new FolderRepository();
+
+  // export pdf handler
+  ipcMain.handle(
+    'notes:exportPDF',
+    async (
+      _e,
+      payload: {
+        title: string;
+        strokes: any[]; // includes strokes and text
+        crop: { x: number; y: number; w: number; h: number };
+      }
+    ) => {
+      const { canceled, filePath } = await dialog.showSaveDialog({
+        title: 'Export as PDF',
+        defaultPath: `${payload.title || 'Note'}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (canceled || !filePath) return { ok: false, reason: 'cancelled' };
+
+      const win = new BrowserWindow({
+        width: Math.min(1200, payload.crop.w + 40),
+        height: Math.min(1000, payload.crop.h + 40),
+        show: false,
+        webPreferences: { offscreen: true, nodeIntegration: false, contextIsolation: true },
+      });
+
+      const dataUrl = makeExportHTMLDataURL({
+        title: payload.title,
+        items: payload.strokes,
+        crop: payload.crop,
+      });
+      await win.loadURL(dataUrl);
+      await new Promise((r) => setTimeout(r, 60));
+
+      const pdf = await win.webContents.printToPDF({
+        printBackground: true,
+        // Let Electron paginate automatically; since page content is exactly the crop, it prints 1 page
+        landscape: false,
+      });
+
+      fs.writeFileSync(filePath, pdf);
+      win.destroy();
+      return { ok: true, filePath };
+    }
+  );
 
   // notes handlers
   // Register IPC handlers after services exist

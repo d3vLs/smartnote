@@ -399,7 +399,7 @@ export function Editor({
         y: p.y,
         w: 240,
         h: 80,
-        text: 'Text',
+        text: '',
         font: '16px system-ui, sans-serif',
         color: '#222',
         align: 'left',
@@ -545,6 +545,13 @@ export function Editor({
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, [tool]);
+
+  useEffect(() => {
+    if (editingTextIdx === null) return;
+    const it = itemsRef.current[editingTextIdx] as TextBox | undefined;
+    if (!it || it.kind !== 'text') return;
+    setTimeout(() => textOverlayRef.current?.focus(), 50);
+  }, [editingTextIdx]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -734,6 +741,58 @@ export function Editor({
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
+  // compute Content Bounds for pdf export
+  function computeContentBounds(items: CanvasItem[]) {
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const it of items) {
+      if (it.kind === 'stroke') {
+        if (!it.points?.length) continue;
+        for (const p of it.points) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+      } else if (it.kind === 'text') {
+        if (it.x < minX) minX = it.x;
+        if (it.y < minY) minY = it.y;
+        if (it.x + it.w > maxX) maxX = it.x + it.w;
+        if (it.y + it.h > maxY) maxY = it.y + it.h;
+      }
+    }
+    if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+      // No content; return a small default rect
+      return { x: 0, y: 0, w: 600, h: 400 };
+    }
+    const margin = 24;
+    const x = Math.floor(minX - margin);
+    const y = Math.floor(minY - margin);
+    const w = Math.ceil(maxX - minX + margin * 2);
+    const h = Math.ceil(maxY - minY + margin * 2);
+    return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
+  }
+
+  // exportpdf
+  const exportPDF = async () => {
+    if (drawing.current) finalizeStroke();
+    const snapshot = itemsRef.current;
+    const bounds = computeContentBounds(snapshot);
+
+    // Option 1: send items and crop rect; main/export page will translate by -bounds.x/y
+    const res = await window.api.exportPDF({
+      title: (title || 'Note').trim(),
+      strokes: snapshot, // include both strokes and text items
+      crop: bounds, // <-- new
+    });
+    if (res?.ok) {
+      // optional toast: "Exported PDF"
+      showSavedToast('Exported PDF');
+    }
+  };
+
   // save
   const save = async () => {
     if (drawing.current) finalizeStroke();
@@ -794,6 +853,9 @@ export function Editor({
         </select>
         <button onClick={save} title="Save (Ctrl/Cmd+S)">
           Save
+        </button>
+        <button onClick={exportPDF} title="Export as PDF">
+          Export PDF
         </button>
       </div>
 

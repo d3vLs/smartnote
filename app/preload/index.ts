@@ -1,6 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('api', {
+  // export pdf
+  exportPDF: (payload: {
+    title: string;
+    strokes: any[];
+    crop: { x: number; y: number; w: number; h: number };
+  }) => ipcRenderer.invoke('notes:exportPDF', payload),
+
   // notes
 
   saveNote: async (input: any) => ipcRenderer.invoke('notes:save', input),
