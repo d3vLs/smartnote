@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { TagManager } from './TagManager';
 
-// Types
+/**
+ * Canvas data types
+ * - Stroke: freehand polyline with color/width
+ * - TextBox: bounded text region with font and alignment
+ * - CanvasItem: union for render/state
+ */
 type StrokePoint = { x: number; y: number; t?: number };
 type Stroke = { kind: 'stroke'; points: StrokePoint[]; color: string; width: number };
 type TextBox = {
@@ -17,6 +22,8 @@ type TextBox = {
   align: 'left' | 'center' | 'right';
 };
 type CanvasItem = Stroke | TextBox;
+
+/** Active tool for pointer interactions */
 type Tool = 'pen' | 'select' | 'erase' | 'text';
 
 export function Editor({
@@ -26,29 +33,52 @@ export function Editor({
   noteId: number | null;
   onSaved: (id: number) => void;
 }) {
-  // Save toast
+  // --- UI: transient "Saved" toast --------------------------------------------------------------
+
   const [savedToast, setSavedToast] = useState<{ visible: boolean; text: string }>({
     visible: false,
     text: '',
   });
   const toastTimer = useRef<number | null>(null);
 
-  // Tool state
+  /** Show a small non-blocking toast near the canvas */
+  function showSavedToast(text = 'Saved') {
+    if (toastTimer.current) {
+      window.clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+    }
+    setSavedToast({ visible: true, text });
+    toastTimer.current = window.setTimeout(() => {
+      setSavedToast((prev) => ({ ...prev, visible: false }));
+      toastTimer.current = null;
+    }, 1600);
+  }
+  useEffect(() => {
+    // Cleanup timer if component unmounts during toast
+    return () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    };
+  }, []);
+
+  // --- Tool and drawing state -------------------------------------------------------------------
+
   const [tool, setTool] = useState<Tool>('pen');
   const [penColor, setPenColor] = useState<string>('#222');
   const [penWidth, setPenWidth] = useState<number>(2);
 
-  // Note state
+  // Note data and undo/redo history
   const [title, setTitle] = useState('');
   const [items, setItems] = useState<CanvasItem[]>([]);
-  const itemsRef = useRef<CanvasItem[]>([]);
+  const itemsRef = useRef<CanvasItem[]>([]); // latest items without waiting for state re-render
   const undoStack = useRef<CanvasItem[][]>([]);
   const redoStack = useRef<CanvasItem[][]>([]);
   const HISTORY_LIMIT = 10;
+
+  // Canvas and in-progress stroke
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef<Stroke | null>(null);
 
-  // Selection rectangle and helpers
+  // Selection rectangle (marquee) and pointer flags
   const [selectionRect, setSelectionRect] = useState<{
     x: number;
     y: number;
@@ -59,25 +89,27 @@ export function Editor({
   const selectionDraggingRef = useRef<boolean>(false);
   const pointerDownRef = useRef<boolean>(false);
 
-  // Infinite canvas pan & zoom
+  // Infinite canvas transforms: world offset (pan) and scale (zoom)
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const offsetRef = useRef(offset);
   const [scale, setScale] = useState(1);
+  const offsetRef = useRef(offset);
   const scaleRef = useRef(scale);
+
+  // Right-button panning helpers (separate from world offset)
   const panningRef = useRef<boolean>(false);
   const panStartRef = useRef<{ x: number; y: number } | null>(null);
   const panOriginRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Folders
+  // Folders (header move-to dropdown)
   const [folders, setFolders] = useState<{ folderId: number; name: string }[]>([]);
   const [folderId, setFolderId] = useState<number | null>(null);
 
-  // Selection / text editing
+  // Selection and text editing overlay
   const [selectedIdx, setSelectedIdx] = useState<number[]>([]);
   const [editingTextIdx, setEditingTextIdx] = useState<number | null>(null);
   const textOverlayRef = useRef<HTMLTextAreaElement>(null);
 
-  // Tags drawer
+  // Right drawer (tags) visibility; persisted in localStorage for UX continuity
   const [tagsOpen, setTagsOpen] = useState(true);
   useEffect(() => {
     const v = localStorage.getItem('tagsOpen');
@@ -87,12 +119,14 @@ export function Editor({
     localStorage.setItem('tagsOpen', tagsOpen ? '1' : '0');
   }, [tagsOpen]);
 
-  // Load folders
+  // --- Data loading -----------------------------------------------------------------------------
+
+  // Load folder catalog once for header dropdown
   useEffect(() => {
     (async () => setFolders(await window.api.listFolders()))();
   }, []);
 
-  // Load note
+  // Load note content on noteId change; map legacy strokes (no kind) to current union type
   useEffect(() => {
     const load = async () => {
       if (noteId) {
@@ -113,39 +147,28 @@ export function Editor({
     load();
   }, [noteId]);
 
-  function showSavedToast(text = 'Saved') {
-    if (toastTimer.current) {
-      window.clearTimeout(toastTimer.current);
-      toastTimer.current = null;
-    }
-    setSavedToast({ visible: true, text });
-    toastTimer.current = window.setTimeout(() => {
-      setSavedToast((prev) => ({ ...prev, visible: false }));
-      toastTimer.current = null;
-    }, 1600);
-  }
+  // --- Rendering (canvas repaint) ---------------------------------------------------------------
 
-  useEffect(() => {
-    return () => {
-      if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    };
-  }, []);
-
-  // Repaint
+  /**
+   * repaint:
+   * - clears canvas (device pixels), paints white page
+   * - applies combined transform (DPR * world scale/offset)
+   * - renders items (strokes, text), selection outlines, and in-progress stroke
+   */
   function repaint() {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!ctx || !canvas) return;
     const { width, height } = ctx.canvas;
 
-    // clear and paint white
+    // Reset transform and clear screen (device pixel space)
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, width, height);
 
+    // Apply world transform: DPR scaling then pan/zoom
     const dpr = window.devicePixelRatio || 1;
-    // Apply combined transform: DPR then world pan/zoom
     ctx.setTransform(
       dpr * scaleRef.current,
       0,
@@ -155,9 +178,11 @@ export function Editor({
       offsetRef.current.y * dpr
     );
 
+    // Items (strokes and text)
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (!it) continue;
+
       if (it.kind === 'stroke') {
         if (!it.points?.length) continue;
         ctx.strokeStyle = it.color ?? '#222';
@@ -168,6 +193,7 @@ export function Editor({
         it.points.forEach((p, j) => (j === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
         ctx.stroke();
 
+        // Selected stroke highlight (subtle overlay)
         if (selectedIdx.includes(i)) {
           ctx.save();
           ctx.strokeStyle = '#0a84ff';
@@ -178,7 +204,8 @@ export function Editor({
           ctx.stroke();
           ctx.restore();
         }
-      } else if (it.kind === 'text') {
+      } else {
+        // Text measurement/wrapping to fit width/height box
         ctx.save();
         ctx.font = it.font || '16px system-ui, sans-serif';
         ctx.fillStyle = it.color || '#222';
@@ -206,7 +233,7 @@ export function Editor({
       }
     }
 
-    // Text selection highlight boxes
+    // Selected text boxes (show bounds)
     if (selectedIdx.length) {
       ctx.save();
       ctx.strokeStyle = '#0a84ff';
@@ -214,14 +241,12 @@ export function Editor({
       ctx.globalAlpha = 0.6;
       for (const i of selectedIdx) {
         const it = items[i];
-        if (it?.kind === 'text') {
-          ctx.strokeRect(it.x, it.y, it.w, it.h);
-        }
+        if (it?.kind === 'text') ctx.strokeRect(it.x, it.y, it.w, it.h);
       }
       ctx.restore();
     }
 
-    // In-progress stroke
+    // In-progress stroke for live ink preview
     if (drawing.current && drawing.current.points?.length) {
       const s = drawing.current;
       ctx.save();
@@ -235,7 +260,7 @@ export function Editor({
       ctx.restore();
     }
 
-    // Selection rectangle (world coords)
+    // Selection marquee (world coordinates)
     if (selectionRect) {
       ctx.save();
       ctx.strokeStyle = '#0a84ff';
@@ -245,9 +270,10 @@ export function Editor({
       ctx.restore();
     }
   }
+  // Trigger repaint on relevant state changes
   useEffect(() => repaint(), [items, selectionRect, selectedIdx, offset, scale]);
 
-  // Sync refs
+  // Keep fast refs in sync with state
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
@@ -258,7 +284,9 @@ export function Editor({
     scaleRef.current = scale;
   }, [scale]);
 
-  // History helpers
+  // --- Undo/redo (snapshot strategy) -------------------------------------------------------------
+
+  /** Deep-ish clone for history: text shallow, stroke points copied */
   function snapshotClone(snapshot: CanvasItem[]) {
     return snapshot.map((it) =>
       it.kind === 'text'
@@ -275,7 +303,7 @@ export function Editor({
     const clone = snapshotClone(snapshot);
     undoStack.current.push(clone);
     if (undoStack.current.length > HISTORY_LIMIT) undoStack.current.shift();
-    redoStack.current = [];
+    redoStack.current = []; // clear redo on new change
   }
   function undo() {
     const u = undoStack.current;
@@ -296,7 +324,12 @@ export function Editor({
     setSelectedIdx([]);
   }
 
-  // Canvas DPR setup and resize
+  // --- Canvas sizing and DPR --------------------------------------------------------------------
+
+  /**
+   * Initialize canvas backing store to match CSS size * DPR.
+   * DPR scaling is applied inside repaint together with world transforms to avoid double scale.
+   */
   useEffect(() => {
     const setup = () => {
       const canvas = canvasRef.current;
@@ -310,7 +343,6 @@ export function Editor({
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        // DPR scaling happens in repaint with world transforms
       }
       repaint();
     };
@@ -319,7 +351,9 @@ export function Editor({
     return () => window.removeEventListener('resize', setup);
   }, []);
 
-  // Coord helpers
+  // --- Coordinate transforms --------------------------------------------------------------------
+
+  /** Convert screen (client) coordinates into world coordinates by undoing current pan/zoom */
   function toCanvasPoint(e: { clientX: number; clientY: number }) {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
@@ -330,10 +364,12 @@ export function Editor({
     return { x, y, t: Date.now() };
   }
 
-  // Drawing finalize
+  // --- Stroke finalize (commit in-progress stroke to items) -------------------------------------
+
   const finalizeStroke = () => {
     if (tool === 'pen' && drawing.current) {
       const s = drawing.current;
+      // Copy points so subsequent edits don't mutate committed history
       const saved: Stroke = {
         kind: 'stroke',
         color: s.color,
@@ -348,11 +384,19 @@ export function Editor({
     }
   };
 
-  // Pointer handlers
+  // --- Pointer handlers -------------------------------------------------------------------------
+
+  /**
+   * Pointer down:
+   * - Right button → start panning
+   * - Left button → start tool-specific interaction (pen/select/erase/text)
+   * Uses pointer capture to receive move/up outside the canvas bounds.
+   */
   const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (editingTextIdx !== null) return;
     const canvas = canvasRef.current;
-    // Right-click: pan
+
+    // Right-button drag to pan (does not modify items)
     if (e.button === 2) {
       panningRef.current = true;
       panStartRef.current = { x: e.clientX, y: e.clientY };
@@ -360,6 +404,7 @@ export function Editor({
       canvas?.setPointerCapture?.(e.pointerId);
       return;
     }
+    // Ignore non-primary buttons
     if (e.button !== 0) {
       canvas?.releasePointerCapture?.(e.pointerId);
       selectionStartRef.current = null;
@@ -367,18 +412,21 @@ export function Editor({
       setSelectionRect(null);
       return;
     }
+
+    // Primary pointer captured for continuous interaction
     canvas?.setPointerCapture?.(e.pointerId);
     pointerDownRef.current = true;
     const p = toCanvasPoint(e);
 
     if (tool === 'pen') {
-      if (drawing.current) finalizeStroke();
+      if (drawing.current) finalizeStroke(); // just-in-case cleanup
       drawing.current = { kind: 'stroke', points: [p], color: penColor, width: penWidth };
-      repaint();
+      repaint(); // show first dot immediately
       return;
     }
 
     if (tool === 'select') {
+      // Start a marquee; if you later add “drag selection to move”, decide here between drag vs marquee
       selectionStartRef.current = { x: p.x, y: p.y };
       selectionDraggingRef.current = false;
       setSelectionRect(null);
@@ -391,6 +439,7 @@ export function Editor({
     }
 
     if (tool === 'text') {
+      // Insert empty text box and enter edit mode (overlay textarea)
       const id = `t_${Date.now()}`;
       const tb: TextBox = {
         kind: 'text',
@@ -416,7 +465,14 @@ export function Editor({
     }
   };
 
+  /**
+   * Pointer move:
+   * - If panning: update world offset
+   * - If drawing: append point and repaint
+   * - If selecting: update marquee rect and live selected indices
+   */
   const onCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Pan camera with right button
     if (panningRef.current && panStartRef.current && panOriginRef.current) {
       const dx = e.clientX - panStartRef.current.x;
       const dy = e.clientY - panStartRef.current.y;
@@ -431,7 +487,7 @@ export function Editor({
 
     if (tool === 'pen' && drawing.current) {
       drawing.current.points.push(p);
-      repaint();
+      repaint(); // live ink
       return;
     }
 
@@ -441,11 +497,15 @@ export function Editor({
         ry = Math.min(s.y, p.y);
       const rw = Math.abs(p.x - s.x),
         rh = Math.abs(p.y - s.y);
+
+      // Debounce accidental click: only show rectangle after small movement
       const moved = Math.hypot(p.x - s.x, p.y - s.y) > 4;
       if (moved) {
         selectionDraggingRef.current = true;
         setSelectionRect({ x: rx, y: ry, w: rw, h: rh });
       }
+
+      // Live update selection by intersection/containment
       const sel: number[] = [];
       itemsRef.current.forEach((it, i) => {
         if (it.kind === 'text') {
@@ -461,8 +521,14 @@ export function Editor({
     }
   };
 
+  /**
+   * Pointer up/cancel:
+   * - End pan or stroke
+   * - Finalize marquee selection or perform click-select on topmost item
+   */
   const onCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
+
     if (panningRef.current) {
       panningRef.current = false;
       panStartRef.current = null;
@@ -472,9 +538,12 @@ export function Editor({
     }
     canvas?.releasePointerCapture?.(e.pointerId);
     pointerDownRef.current = false;
+
+    // Commit a stroke if any
     finalizeStroke();
 
     if (tool === 'select') {
+      // Finish marquee selection if we were dragging a rectangle
       if (selectionDraggingRef.current && selectionRect) {
         const sel: number[] = [];
         itemsRef.current.forEach((it, i) => {
@@ -503,7 +572,7 @@ export function Editor({
         return;
       }
 
-      // Click select topmost
+      // Click without marquee: pick topmost item under cursor
       const p = toCanvasPoint(e);
       const hit: number[] = [];
       for (let i = itemsRef.current.length - 1; i >= 0; i--) {
@@ -529,11 +598,11 @@ export function Editor({
       setSelectedIdx(hit.length ? [hit[0]] : []);
       selectionDraggingRef.current = false;
     } else {
+      // Clear marquee when leaving select tool
       setSelectionRect(null);
       selectionStartRef.current = null;
     }
   };
-
   const onCanvasPointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     canvas?.releasePointerCapture?.(e.pointerId);
@@ -541,11 +610,13 @@ export function Editor({
     finalizeStroke();
   };
   useEffect(() => {
+    // Safety: commit stroke if mouseup occurs outside canvas
     const up = () => finalizeStroke();
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, [tool]);
 
+  // When a text box enters edit mode, focus its overlay textarea
   useEffect(() => {
     if (editingTextIdx === null) return;
     const it = itemsRef.current[editingTextIdx] as TextBox | undefined;
@@ -553,7 +624,8 @@ export function Editor({
     setTimeout(() => textOverlayRef.current?.focus(), 50);
   }, [editingTextIdx]);
 
-  // Keyboard shortcuts
+  // --- Keyboard shortcuts (capture-phase to beat global accelerators) ---------------------------
+
   useEffect(() => {
     const isTypingField = (el: Element | null) => {
       if (!el) return false;
@@ -568,6 +640,7 @@ export function Editor({
       const cmd = e.metaKey || e.ctrlKey;
       const alt = e.altKey;
 
+      // Save everywhere and block parent handlers (e.g., "New")
       if (cmd && key === 's') {
         e.preventDefault();
         e.stopPropagation();
@@ -588,6 +661,7 @@ export function Editor({
         return;
       }
 
+      // Don't switch tools while typing in inputs or editing text overlay
       if (editingTextIdx !== null) return;
       if (isTypingField(document.activeElement)) return;
 
@@ -628,7 +702,7 @@ export function Editor({
     return () => window.removeEventListener('keydown', onKey, { capture: true } as any);
   }, [editingTextIdx, selectedIdx]);
 
-  // Clear selection on tool change away from select
+  // Clear selection when leaving the select tool (avoids stale highlight)
   useEffect(() => {
     if (tool !== 'select') {
       setSelectedIdx([]);
@@ -637,7 +711,9 @@ export function Editor({
     }
   }, [tool]);
 
-  // Helpers
+  // --- Geometry helpers ------------------------------------------------------------------------
+
+  /** Distance from a point to a line segment (used for stroke hit-testing/erase/select) */
   function pointNearSegment(
     px: number,
     py: number,
@@ -670,6 +746,7 @@ export function Editor({
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  /** Remove items that intersect a small neighborhood around (x,y) */
   function eraseAtPoint(x: number, y: number) {
     const threshold = 8;
     const before = itemsRef.current;
@@ -681,7 +758,7 @@ export function Editor({
         const p1 = it.points[i - 1],
           p2 = it.points[i];
         const dist = pointNearSegment(x, y, p1.x, p1.y, p2.x, p2.y);
-        if (dist <= threshold) return false;
+        if (dist <= threshold) return false; // erase this stroke
       }
       return true;
     });
@@ -692,6 +769,7 @@ export function Editor({
     }
   }
 
+  /** Bounding box for a stroke (used for selection intersection tests) */
   function strokeBounds(st: Stroke) {
     let minX = Infinity,
       minY = Infinity,
@@ -706,7 +784,7 @@ export function Editor({
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
   }
 
-  // Text overlay focus
+  // Focus textarea overlay shortly after entering edit mode (DOM must paint first)
   useEffect(() => {
     if (editingTextIdx === null) return;
     const it = itemsRef.current[editingTextIdx] as TextBox | undefined;
@@ -714,23 +792,29 @@ export function Editor({
     setTimeout(() => textOverlayRef.current?.focus(), 50);
   }, [editingTextIdx]);
 
-  // Zoom with ctrl/cmd + wheel
+  // --- Zoom (Ctrl/Cmd + Wheel) ------------------------------------------------------------------
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onWheel = (ev: WheelEvent) => {
-      if (!(ev.ctrlKey || ev.metaKey)) return;
+      if (!(ev.ctrlKey || ev.metaKey)) return; // let normal scroll outside
       ev.preventDefault();
+
+      // Zoom around cursor position by translating offset to keep focal point stable
       const rect = canvas.getBoundingClientRect();
       const cx = ev.clientX - rect.left;
       const cy = ev.clientY - rect.top;
       const worldX = (cx - offsetRef.current.x) / scaleRef.current;
       const worldY = (cy - offsetRef.current.y) / scaleRef.current;
+
       const delta = -ev.deltaY;
       const zoomFactor = delta > 0 ? 1.1 : 0.9;
       const nextScale = Math.max(0.1, Math.min(4, scaleRef.current * zoomFactor));
+
       const nextOffsetX = cx - worldX * nextScale;
       const nextOffsetY = cy - worldY * nextScale;
+
       scaleRef.current = nextScale;
       offsetRef.current = { x: nextOffsetX, y: nextOffsetY };
       setScale(nextScale);
@@ -741,7 +825,9 @@ export function Editor({
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
-  // compute Content Bounds for pdf export
+  // --- Export (PDF) helpers ---------------------------------------------------------------------
+
+  /** Compute tight bounds around all content (strokes + text), with a padding margin */
   function computeContentBounds(items: CanvasItem[]) {
     let minX = Infinity,
       minY = Infinity,
@@ -756,7 +842,7 @@ export function Editor({
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
         }
-      } else if (it.kind === 'text') {
+      } else {
         if (it.x < minX) minX = it.x;
         if (it.y < minY) minY = it.y;
         if (it.x + it.w > maxX) maxX = it.x + it.w;
@@ -764,8 +850,7 @@ export function Editor({
       }
     }
     if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
-      // No content; return a small default rect
-      return { x: 0, y: 0, w: 600, h: 400 };
+      return { x: 0, y: 0, w: 600, h: 400 }; // fallback rect for empty notes
     }
     const margin = 24;
     const x = Math.floor(minX - margin);
@@ -775,25 +860,22 @@ export function Editor({
     return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
   }
 
-  // exportpdf
+  /** Export only the cropped content area via offscreen window + printToPDF */
   const exportPDF = async () => {
     if (drawing.current) finalizeStroke();
     const snapshot = itemsRef.current;
     const bounds = computeContentBounds(snapshot);
-
-    // Option 1: send items and crop rect; main/export page will translate by -bounds.x/y
     const res = await window.api.exportPDF({
       title: (title || 'Note').trim(),
-      strokes: snapshot, // include both strokes and text items
-      crop: bounds, // <-- new
+      strokes: snapshot, // union array (strokes + text)
+      crop: bounds,
     });
-    if (res?.ok) {
-      // optional toast: "Exported PDF"
-      showSavedToast('Exported PDF');
-    }
+    if (res?.ok) showSavedToast('Exported PDF');
   };
 
-  // save
+  // --- Save -------------------------------------------------------------------------------------
+
+  /** Save note (finalizes active stroke, persists, shows toast) */
   const save = async () => {
     if (drawing.current) finalizeStroke();
     const snapshot = itemsRef.current;
@@ -806,11 +888,14 @@ export function Editor({
       folderId,
     });
     onSaved(id);
-    showSavedToast('Saved'); // toast
+    showSavedToast('Saved');
   };
+
+  // --- UI ---------------------------------------------------------------------------------------
 
   return (
     <div
+      // Prevent page scroll with wheel; allow Ctrl/Cmd for zoom handler above
       onWheel={(e) => {
         if (!(e.ctrlKey || e.metaKey)) e.preventDefault();
       }}
@@ -822,7 +907,7 @@ export function Editor({
         overflow: 'hidden',
       }}
     >
-      {/* Slim header */}
+      {/* Header: title, folder move, Save/Export actions */}
       <div
         style={{
           padding: 8,
@@ -851,7 +936,14 @@ export function Editor({
             </option>
           ))}
         </select>
-        <button onClick={save} title="Save (Ctrl/Cmd+S)">
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            save();
+          }}
+          title="Save (Ctrl/Cmd+S)"
+        >
           Save
         </button>
         <button onClick={exportPDF} title="Export as PDF">
@@ -859,7 +951,7 @@ export function Editor({
         </button>
       </div>
 
-      {/* Canvas + right drawer */}
+      {/* Workspace: canvas + right tags drawer */}
       <div style={{ display: 'flex', height: '100%' }}>
         <div
           style={{
@@ -870,12 +962,12 @@ export function Editor({
             minHeight: 300,
           }}
         >
-          {/* Save toast overlay (non-blocking) */}
+          {/* Save toast (non-blocking overlay) */}
           <div
             aria-live="polite"
             style={{
               position: 'absolute',
-              right: tagsOpen ? 284 : 16, // offset when drawer open
+              right: tagsOpen ? 284 : 16,
               top: 16,
               transform: savedToast.visible ? 'translateY(0)' : 'translateY(-8px)',
               transition: 'transform 180ms ease-out, opacity 180ms ease-out',
@@ -894,7 +986,8 @@ export function Editor({
             <span style={{ marginRight: 8 }}>✓</span>
             {savedToast.text}
           </div>
-          {/* Top-right toggle for tags drawer */}
+
+          {/* Tag drawer toggle (top-right) */}
           <button
             title={tagsOpen ? 'Hide tags' : 'Show tags'}
             onClick={() => setTagsOpen((v) => !v)}
@@ -914,7 +1007,7 @@ export function Editor({
             {tagsOpen ? '›' : '‹'}
           </button>
 
-          {/* Non-interactive backdrop */}
+          {/* Page backdrop (visual only) */}
           <div
             style={{
               position: 'absolute',
@@ -937,6 +1030,7 @@ export function Editor({
             />
           </div>
 
+          {/* Main drawing canvas */}
           <canvas
             ref={canvasRef}
             width={800}
@@ -948,16 +1042,16 @@ export function Editor({
             style={{ width: '100%', height: '100%', position: 'relative', zIndex: 2 }}
           />
 
-          {/* Optional context-menu catcher */}
+          {/* Optional invisible canvas to consume context menu if needed */}
           <canvas
-            onContextMenu={(ev) => {
+            onContextMenu={() => {
               selectionStartRef.current = null;
               selectionDraggingRef.current = false;
               setSelectionRect(null);
             }}
           />
 
-          {/* Text overlay */}
+          {/* Text editing overlay textarea (positioned in CSS pixels over world coords) */}
           {editingTextIdx !== null &&
             (() => {
               const it = itemsRef.current[editingTextIdx] as TextBox | undefined;
@@ -998,7 +1092,7 @@ export function Editor({
               );
             })()}
 
-          {/* Bottom toolbar: wrapper non-interactive; inner groups interactive */}
+          {/* Floating tools palette (non-blocking container; interactive children) */}
           <div
             style={{
               position: 'absolute',
@@ -1086,7 +1180,7 @@ export function Editor({
           </div>
         </div>
 
-        {/* Right drawer for tags */}
+        {/* Collapsible tags drawer (mounted only when open) */}
         <div
           style={{
             width: tagsOpen ? 260 : 0,

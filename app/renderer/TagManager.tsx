@@ -3,8 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 type Tag = { tagId: number; name: string };
 
-export function TagManager({ noteId, collapsed }: { noteId: number | null; collapsed?: boolean }) {
-  if (collapsed) return null;
+export function TagManager({ noteId }: { noteId: number | null }) {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [noteTags, setNoteTags] = useState<Tag[]>([]);
   const [input, setInput] = useState('');

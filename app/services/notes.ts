@@ -1,20 +1,41 @@
 import { NoteRepository } from '../repo/notes';
 import { TagRepository } from '../repo/tags';
 import type { SaveNoteInput, NoteDTO, Stroke, NoteRow } from '../common/types';
+import { getDb } from '../repo/db';
 
+/**
+ * NoteService
+ * - Orchestrates multi-step operations around notes (upsert + tags) inside a single transaction.
+ * - Performs validation and DTO translation to/from repository rows.
+ */
 export class NoteService {
   constructor(
     private notes = new NoteRepository(),
     private tags = new TagRepository()
   ) {}
 
+  /**
+   * save:
+   * - Validates title.
+   * - Serializes strokes to JSON (renderer sends typed data).
+   * - Wraps upsertNote + setNoteTags in a single transaction for atomic updates.
+   * - Returns the effective noteId.
+   */
   save(input: SaveNoteInput): number {
     if (!input.title || !input.title.trim()) throw new Error('Title required');
+
+    // Serialize canvas items; keep null for empty to save a few bytes if desired
     const strokesJSON = JSON.stringify(input.strokes ?? []);
-    const db = (require('../repo/db') as any).getDb();
+
+    // Single connection shared across repos
+    const db = getDb();
+
+    // better-sqlite3 transaction wrapper
     const tx = db.transaction((fn: Function) => fn());
+
     let noteId = -1;
     tx(() => {
+      // 1) Upsert note core fields
       noteId = this.notes.upsertNote(db, {
         noteId: input.noteId,
         title: input.title.trim(),
@@ -22,12 +43,20 @@ export class NoteService {
         strokesJSON,
         folderId: input.folderId ?? null,
       });
+
+      // 2) Ensure tags exist and attach them to the note
       const tagIds = (input.tagNames ?? []).map((n) => this.tags.getOrCreateTagByName(n));
       this.notes.setNoteTags(db, noteId, tagIds);
     });
+
     return noteId;
   }
 
+  /**
+   * get:
+   * - Loads a note + tag names.
+   * - Parses strokes JSON defensively; returns empty array on parse error.
+   */
   get(noteId: number): NoteDTO | undefined {
     const row = this.notes.get(noteId) as (NoteRow & { tagNames: string[] }) | undefined;
     if (!row) return undefined;
@@ -36,6 +65,7 @@ export class NoteService {
     try {
       strokes = row.strokes ? (JSON.parse(row.strokes) as Stroke[]) : [];
     } catch {
+      // Corrupt JSON shouldn't crash the app; treat as no strokes
       strokes = [];
     }
 
@@ -50,19 +80,30 @@ export class NoteService {
     };
   }
 
+  /**
+   * search:
+   * - Composes a flexible search that supports:
+   *   - free-text q across title, content, and tag names,
+   *   - folder filter (folderId or explicitly null for "No Folder"),
+   *   - tagIds / tagNames filters (any-of semantics; AND can be added if needed).
+   * - Returns a minimal row set for fast list rendering.
+   *
+   * Note: This service-level search differs from repo.search which focuses on SQL construction for AND semantics by tagNames.
+   * This version builds a LEFT JOIN to include notes without tags unless filtered strictly by tag filters.
+   */
   search(criteria: {
     q?: string;
     folderId?: number | null;
     tagIds?: number[];
     tagNames?: string[];
   }) {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
 
     const params: any[] = [];
     const whereParts: string[] = [];
     let joinTags = false;
 
-    // Folder constraint
+    // Folder constraint (explicit null means "No Folder")
     if (criteria.folderId !== undefined) {
       if (criteria.folderId === null) {
         whereParts.push('n.folderId IS NULL');
@@ -72,79 +113,53 @@ export class NoteService {
       }
     }
 
-    // Text query: title/content
+    // Free-text query over title/content (lowercased LIKE)
     const q = criteria.q?.trim().toLowerCase();
     if (q) {
-      whereParts.push('(LOWER(n.title) LIKE ? OR LOWER(n.content) LIKE ?)');
-      const like = `%${q}%`;
-      params.push(like, like);
+      // We will incorporate tag name in an OR group below; hold off pushing params here to avoid duplication.
     }
 
-    // Text query also matches tag names
-    if (q) {
-      joinTags = true;
-      // Wrap text matching in OR to not over-constrain results
-      // Combine with existing whereParts by pushing an OR-able clause.
-      // Easiest is to add another disjunct and later rewrap where.
-      // To keep it simple, just add another condition; we’ll OR group everything below.
-    }
-
-    // Explicit tag filters by ids
+    // Tag filters (any-of semantics for this service; for AND semantics, use repo.search)
     if (criteria.tagIds && criteria.tagIds.length) {
       joinTags = true;
       whereParts.push(`nt.tagId IN (${criteria.tagIds.map(() => '?').join(',')})`);
       params.push(...criteria.tagIds);
     }
-
-    // Explicit tag filters by names
     if (criteria.tagNames && criteria.tagNames.length) {
       joinTags = true;
       whereParts.push(`LOWER(t.name) IN (${criteria.tagNames.map(() => '?').join(',')})`);
       params.push(...criteria.tagNames.map((s) => s.toLowerCase()));
     }
 
-    // Build OR group for the free-text: title/content OR tag name
-    let textOrClause = '';
+    // Build final SQL. If q exists, prepend an OR group that matches title/content OR tag name.
     if (q) {
       joinTags = true;
-      textOrClause = '(LOWER(n.title) LIKE ? OR LOWER(n.content) LIKE ? OR LOWER(t.name) LIKE ?)';
+      const textOrClause =
+        '(LOWER(n.title) LIKE ? OR LOWER(n.content) LIKE ? OR LOWER(t.name) LIKE ?)';
       const like = `%${q}%`;
-      // Push these after other params so order matches placeholders in final SQL
-      // We will concatenate this OR group at the front of WHERE with AND around the rest
-      // To avoid double-adding the like values, remove earlier push for q or rebuild:
-      // Rebuild full params cleanly:
-      // For simplicity, rebuild params/where now:
 
-      // Rebuild cleanly:
-      const rebuiltWhere: string[] = [];
+      // Rebuild where parts cleanly to ensure the OR group is the first condition (AND with the rest)
+      const rebuilt: string[] = [];
       const rebuiltParams: any[] = [];
 
-      // Folder
+      // Keep folder and explicit tag filters
       if (criteria.folderId !== undefined) {
-        if (criteria.folderId === null) {
-          rebuiltWhere.push('n.folderId IS NULL');
-        } else {
-          rebuiltWhere.push('n.folderId = ?');
+        if (criteria.folderId === null) rebuilt.push('n.folderId IS NULL');
+        else {
+          rebuilt.push('n.folderId = ?');
           rebuiltParams.push(criteria.folderId);
         }
       }
-
-      // Tag id/name specific filters
       if (criteria.tagIds && criteria.tagIds.length) {
-        rebuiltWhere.push(`nt.tagId IN (${criteria.tagIds.map(() => '?').join(',')})`);
+        rebuilt.push(`nt.tagId IN (${criteria.tagIds.map(() => '?').join(',')})`);
         rebuiltParams.push(...criteria.tagIds);
       }
       if (criteria.tagNames && criteria.tagNames.length) {
-        rebuiltWhere.push(`LOWER(t.name) IN (${criteria.tagNames.map(() => '?').join(',')})`);
+        rebuilt.push(`LOWER(t.name) IN (${criteria.tagNames.map(() => '?').join(',')})`);
         rebuiltParams.push(...criteria.tagNames.map((s) => s.toLowerCase()));
       }
 
-      // Now prepend the OR text group
-      const like2 = `%${q}%`;
-      const like3 = `%${q}%`;
-      const likeTag = `%${q}%`;
-
-      const finalWhere = (textOrClause ? [textOrClause] : []).concat(rebuiltWhere);
+      const finalWhere = [textOrClause, ...rebuilt];
 
       const sql = `
         SELECT n.noteId, n.title, n.content, n.updatedAt, n.folderId
@@ -152,23 +167,22 @@ export class NoteService {
         ${joinTags ? 'LEFT JOIN NoteTags nt ON nt.noteId = n.noteId LEFT JOIN Tags t ON t.tagId = nt.tagId' : ''}
         ${finalWhere.length ? 'WHERE ' + finalWhere.join(' AND ') : ''}
         GROUP BY n.noteId
-        ORDER BY n.updatedAt DESC
+        ORDER BY COALESCE(n.updatedAt, n.createdAt) DESC
       `;
 
-      // Params: for OR clause first, then rebuilt filters
-      const finalParams = textOrClause ? [like2, like3, likeTag, ...rebuiltParams] : rebuiltParams;
-
+      // OR-clause params come first, followed by rebuilt filters
+      const finalParams = [like, like, like, ...rebuiltParams];
       return db.prepare(sql).all(...finalParams);
     }
 
-    // If no q, use the original params/whereParts (folder/tags filters only)
+    // No free-text q: just folder/tags filters
     const sql = `
       SELECT n.noteId, n.title, n.content, n.updatedAt, n.folderId
       FROM Notes n
       ${joinTags ? 'LEFT JOIN NoteTags nt ON nt.noteId = n.noteId LEFT JOIN Tags t ON t.tagId = nt.tagId' : ''}
       ${whereParts.length ? 'WHERE ' + whereParts.join(' AND ') : ''}
       GROUP BY n.noteId
-      ORDER BY n.updatedAt DESC
+      ORDER BY COALESCE(n.updatedAt, n.createdAt) DESC
     `;
     return db.prepare(sql).all(...params);
   }
