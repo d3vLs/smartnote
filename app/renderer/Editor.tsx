@@ -26,6 +26,13 @@ export function Editor({
   noteId: number | null;
   onSaved: (id: number) => void;
 }) {
+  // Save toast
+  const [savedToast, setSavedToast] = useState<{ visible: boolean; text: string }>({
+    visible: false,
+    text: '',
+  });
+  const toastTimer = useRef<number | null>(null);
+
   // Tool state
   const [tool, setTool] = useState<Tool>('pen');
   const [penColor, setPenColor] = useState<string>('#222');
@@ -105,6 +112,24 @@ export function Editor({
     };
     load();
   }, [noteId]);
+
+  function showSavedToast(text = 'Saved') {
+    if (toastTimer.current) {
+      window.clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+    }
+    setSavedToast({ visible: true, text });
+    toastTimer.current = window.setTimeout(() => {
+      setSavedToast((prev) => ({ ...prev, visible: false }));
+      toastTimer.current = null;
+    }, 1600);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    };
+  }, []);
 
   // Repaint
   function repaint() {
@@ -709,7 +734,7 @@ export function Editor({
     return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
-  // Save
+  // save
   const save = async () => {
     if (drawing.current) finalizeStroke();
     const snapshot = itemsRef.current;
@@ -722,6 +747,7 @@ export function Editor({
       folderId,
     });
     onSaved(id);
+    showSavedToast('Saved'); // toast
   };
 
   return (
@@ -782,6 +808,30 @@ export function Editor({
             minHeight: 300,
           }}
         >
+          {/* Save toast overlay (non-blocking) */}
+          <div
+            aria-live="polite"
+            style={{
+              position: 'absolute',
+              right: tagsOpen ? 284 : 16, // offset when drawer open
+              top: 16,
+              transform: savedToast.visible ? 'translateY(0)' : 'translateY(-8px)',
+              transition: 'transform 180ms ease-out, opacity 180ms ease-out',
+              opacity: savedToast.visible ? 1 : 0,
+              zIndex: 5,
+              background: 'rgba(30, 30, 30, 0.92)',
+              color: '#fff',
+              padding: '10px 12px',
+              borderRadius: 8,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.25)',
+              pointerEvents: 'none',
+              font: '13px system-ui, -apple-system, Segoe UI, Roboto, sans-serif',
+              letterSpacing: 0.2,
+            }}
+          >
+            <span style={{ marginRight: 8 }}>✓</span>
+            {savedToast.text}
+          </div>
           {/* Top-right toggle for tags drawer */}
           <button
             title={tagsOpen ? 'Hide tags' : 'Show tags'}

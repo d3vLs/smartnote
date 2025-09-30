@@ -20,6 +20,8 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 1130, // enforce minimum width
+    minHeight: 660, // enforce minimum height
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
