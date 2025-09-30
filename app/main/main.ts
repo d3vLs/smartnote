@@ -47,12 +47,20 @@ async function bootstrap() {
   tagsRepo = new TagRepository();
   foldersRepo = new FolderRepository();
 
+  // notes handlers
   // Register IPC handlers after services exist
   ipcMain.handle('notes:save', (_e, input) => noteService.save(input));
   ipcMain.handle('notes:get', (_e, id: number) => noteService.get(id));
   ipcMain.handle('notes:search', (_e, criteria) => noteService.search(criteria));
+  // Delete a note by id
+  ipcMain.handle('notes:delete', (_e, noteId: number) => {
+    const db = (require('../repo/db') as any).getDb();
+    db.prepare('DELETE FROM Notes WHERE noteId = ?').run(noteId);
+    // NoteTags rows cascade due to FK ON DELETE CASCADE
+  });
 
-  ipcMain.handle('tags:list', () => tagsRepo.list());
+  // Tag handlers
+  // ipcMain.handle('tags:list', () => tagsRepo.list());
   ipcMain.handle('tags:create', (_e, name: string) => tagsRepo.getOrCreateTagByName(name));
   ipcMain.handle('tags:assign', (_e, { noteId, tagId }) => {
     const db = (require('../repo/db') as any).getDb();
@@ -63,6 +71,7 @@ async function bootstrap() {
     db.prepare('DELETE FROM NoteTags WHERE noteId = ? AND tagId = ?').run(noteId, tagId);
   });
 
+  // Folder handlers
   ipcMain.handle('folders:list', () => foldersRepo.list());
   ipcMain.handle('folders:create', (_e, name: string) => foldersRepo.create(name));
   ipcMain.handle('folders:rename', (_e, { folderId, name }: { folderId: number; name: string }) =>
@@ -78,6 +87,59 @@ async function bootstrap() {
       ).run(folderId, noteId);
     }
   );
+  // Hard-delete a folder: move notes to "No Folder" (NULL), then delete folder
+  ipcMain.handle('folders:deleteHard', (_e, folderId: number) => {
+    const db = (require('../repo/db') as any).getDb();
+    const tx = db.transaction((fid: number) => {
+      db.prepare(
+        'UPDATE Notes SET folderId = NULL, updatedAt = CURRENT_TIMESTAMP WHERE folderId = ?'
+      ).run(fid);
+      db.prepare('DELETE FROM Folders WHERE folderId = ?').run(fid);
+    });
+    tx(folderId);
+  });
+
+  // List all tags
+  ipcMain.handle('tags:list', () => {
+    const db = (require('../repo/db') as any).getDb();
+    return db.prepare('SELECT tagId, name FROM Tags ORDER BY name').all();
+  });
+
+  // Add tag to a note (creates tag if missing)
+  ipcMain.handle('tags:addToNote', (_e, { noteId, name }: { noteId: number; name: string }) => {
+    const db = (require('../repo/db') as any).getDb();
+    const insertTag = db.prepare('INSERT INTO Tags (name) VALUES (?) ON CONFLICT(name) DO NOTHING');
+    insertTag.run(name);
+    const tag = db.prepare('SELECT tagId, name FROM Tags WHERE name = ?').get(name);
+    db.prepare('INSERT OR IGNORE INTO NoteTags (noteId, tagId) VALUES (?, ?)').run(
+      noteId,
+      tag.tagId
+    );
+  });
+
+  // Remove tag from a note
+  ipcMain.handle(
+    'tags:removeFromNote',
+    (_e, { noteId, tagId }: { noteId: number; tagId: number }) => {
+      const db = (require('../repo/db') as any).getDb();
+      db.prepare('DELETE FROM NoteTags WHERE noteId = ? AND tagId = ?').run(noteId, tagId);
+    }
+  );
+
+  // Get tags for a specific note
+  ipcMain.handle('tags:forNote', (_e, noteId: number) => {
+    const db = (require('../repo/db') as any).getDb();
+    return db
+      .prepare(
+        `
+      SELECT t.tagId, t.name
+      FROM Tags t
+      JOIN NoteTags nt ON nt.tagId = t.tagId
+      WHERE nt.noteId = ?
+      ORDER BY t.name`
+      )
+      .all(noteId);
+  });
 
   createWindow();
 }

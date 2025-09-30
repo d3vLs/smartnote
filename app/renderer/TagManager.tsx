@@ -1,75 +1,164 @@
-// app/renderer/TagManager.tsx
-import React, { useEffect, useState } from 'react';
+// TagManager.tsx (renderer)
+import React, { useEffect, useMemo, useState } from 'react';
 
-export function TagManager({ noteId }: { noteId: number | null }) {
-  const [tags, setTags] = useState<{ tagId: number; name: string }[]>([]);
-  const [noteTags, setNoteTags] = useState<number[]>([]);
-  const [newName, setNewName] = useState('');
+type Tag = { tagId: number; name: string };
 
-  async function refresh() {
-    const all = await window.api.listTags();
-    setTags(all);
-    if (noteId) {
-      const note = await window.api.getNote(noteId);
-      // note.strokes etc; we need tag names -> map to ids by name
-      const names: string[] = (note as any).tagNames ?? [];
-      const ids = all
-        .filter((t: { name: string }) => names.includes(t.name))
-        .map((t: { tagId: any }) => t.tagId);
-      setNoteTags(ids);
-    } else {
+export function TagManager({ noteId, collapsed }: { noteId: number | null; collapsed?: boolean }) {
+  if (collapsed) return null;
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [noteTags, setNoteTags] = useState<Tag[]>([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // Load catalog once
+  useEffect(() => {
+    (async () => {
+      const all = await window.api.listAllTags?.(); // optional
+      if (Array.isArray(all)) setAllTags(all);
+    })();
+  }, []);
+
+  // Refresh note tags
+  const refreshNoteTags = async (id: number | null) => {
+    if (!id) {
       setNoteTags([]);
+      return;
     }
-  }
+    const tags = await window.api.getTagsForNote(id); // new preload API
+    setNoteTags(tags || []);
+  };
 
   useEffect(() => {
-    refresh();
+    refreshNoteTags(noteId);
   }, [noteId]);
 
-  async function createTag() {
-    if (!newName.trim()) return;
-    await window.api.createTag(newName);
-    setNewName('');
-    await refresh();
-  }
+  const suggestions = useMemo(() => {
+    const existing = new Set(noteTags.map((t) => t.name.toLowerCase()));
+    const q = input.trim().toLowerCase();
+    const base = Array.isArray(allTags) ? allTags : [];
+    return base
+      .filter((t) => !existing.has(t.name.toLowerCase()))
+      .filter((t) => (q ? t.name.toLowerCase().includes(q) : true))
+      .slice(0, 8);
+  }, [allTags, noteTags, input]);
 
-  async function toggle(tagId: number) {
-    if (!noteId) return;
-    if (noteTags.includes(tagId)) {
-      await window.api.removeTag(noteId, tagId);
-    } else {
-      await window.api.assignTag(noteId, tagId);
+  const addTag = async (name: string) => {
+    if (!noteId || !name.trim()) return;
+    setBusy(true);
+    try {
+      await window.api.addTagToNote(noteId, name.trim()); // should create if missing then link
+      await refreshNoteTags(noteId);
+      const all = await window.api.listAllTags?.();
+      if (Array.isArray(all)) setAllTags(all);
+      setInput('');
+    } finally {
+      setBusy(false);
     }
-    await refresh();
-  }
+  };
+
+  const removeTag = async (tagId: number) => {
+    if (!noteId) return;
+    setBusy(true);
+    try {
+      await window.api.removeTagFromNote(noteId, tagId);
+      await refreshNoteTags(noteId);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disabled = !noteId || busy;
 
   return (
-    <div style={{ width: 220, borderLeft: '1px solid #ddd', padding: 8 }}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>Tags</div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+    <aside
+      style={{
+        width: 260,
+        borderLeft: '1px solid #e5e5e5',
+        padding: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div style={{ font: '600 12px system-ui', color: '#555' }}>Tags</div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, minHeight: 28 }}>
+        {noteTags.length ? (
+          noteTags.map((t) => (
+            <span
+              key={t.tagId}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                background: '#f2f2f2',
+                borderRadius: 999,
+                padding: '4px 8px',
+                font: '12px system-ui',
+              }}
+            >
+              {t.name}
+              <button
+                title="Remove tag"
+                onClick={() => removeTag(t.tagId)}
+                disabled={disabled}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  color: '#888',
+                }}
+              >
+                ×
+              </button>
+            </span>
+          ))
+        ) : (
+          <span style={{ color: '#999', font: '12px system-ui' }}>No tags</span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6 }}>
         <input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          placeholder="New tag..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder={noteId ? 'Add tag…' : 'Open a note to tag'}
+          disabled={!noteId || busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && input.trim() && noteId) {
+              e.preventDefault();
+              addTag(input);
+            }
+          }}
           style={{ flex: 1 }}
         />
-        <button onClick={createTag}>Add</button>
+        <button onClick={() => addTag(input)} disabled={!noteId || !input.trim() || busy}>
+          Add
+        </button>
       </div>
-      <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
-        {tags.map((t) => (
-          <label
-            key={t.tagId}
-            style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}
-          >
-            <input
-              type="checkbox"
-              checked={noteTags.includes(t.tagId)}
-              onChange={() => toggle(t.tagId)}
-            />
-            <span>{t.name}</span>
-          </label>
-        ))}
-      </div>
-    </div>
+
+      {!!suggestions.length && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {suggestions.map((s) => (
+            <button
+              key={s.tagId}
+              onClick={() => addTag(s.name)}
+              disabled={disabled}
+              style={{
+                border: '1px solid #ddd',
+                background: '#fff',
+                borderRadius: 999,
+                padding: '3px 8px',
+                font: '12px system-ui',
+                cursor: 'pointer',
+              }}
+              title="Add tag to this note"
+            >
+              + {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </aside>
   );
 }
