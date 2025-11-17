@@ -552,12 +552,14 @@ export function useEditorState({
         }
 
         const p = toCanvasPoint(e);
-        const hit: number[] = [];
+        let hitId: number | undefined = undefined;
+
+        // Find the topmost item under the cursor
         for (let i = itemsRef.current.length - 1; i >= 0; i--) {
           const it = itemsRef.current[i];
           if (it.kind === 'text') {
             if (p.x >= it.x && p.x <= it.x + it.w && p.y >= it.y && p.y <= it.y + it.h) {
-              hit.push(i);
+              hitId = i;
               break;
             }
           } else {
@@ -566,16 +568,35 @@ export function useEditorState({
                 p2 = it.points[j];
               const dist = pointNearSegment(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
               if (dist <= 8) {
-                hit.push(i);
+                hitId = i;
                 break;
               }
             }
-            if (hit.length) break;
+            if (hitId !== undefined) break;
           }
         }
-        setSelectedIdx(hit.length ? [hit[0]] : []);
+
+        const isMultiSelect = e.ctrlKey || e.metaKey;
+
+        if (isMultiSelect) {
+          if (hitId !== undefined) {
+            // Ctrl/Cmd click on an item
+            setSelectedIdx(
+              (prev) =>
+                prev.includes(hitId)
+                  ? prev.filter((id) => id !== hitId) // Deselect if already selected
+                  : [...prev, hitId] // Add to selection
+            );
+          }
+          // If they Ctrl-clicked empty space, do nothing (keep current selection)
+        } else {
+          // Regular click
+          setSelectedIdx(hitId !== undefined ? [hitId] : []);
+        }
+
         selectionDraggingRef.current = false;
       } else {
+        // Clear marquee when leaving select tool
         setSelectionRect(null);
         selectionStartRef.current = null;
       }
