@@ -4,7 +4,6 @@
     "module": "ESNext",
     "jsx": "react-jsx",
     "lib": ["ES2020", "DOM"],
-    "rootDir": "app/renderer",
     "baseUrl": ".",
     "paths": {
       "@common/*": ["app/common/*"]

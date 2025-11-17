@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import type { StrokePoint, Stroke, TextBox, CanvasItem } from '../common/types';
 import { TagManager } from './TagManager';
 
 /**
@@ -7,21 +8,6 @@ import { TagManager } from './TagManager';
  * - TextBox: bounded text region with font and alignment
  * - CanvasItem: union for render/state
  */
-type StrokePoint = { x: number; y: number; t?: number };
-type Stroke = { kind: 'stroke'; points: StrokePoint[]; color: string; width: number };
-type TextBox = {
-  kind: 'text';
-  id: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  text: string;
-  font: string;
-  color: string;
-  align: 'left' | 'center' | 'right';
-};
-type CanvasItem = Stroke | TextBox;
 
 /** Active tool for pointer interactions */
 type Tool = 'pen' | 'select' | 'erase' | 'text';
