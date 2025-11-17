@@ -135,14 +135,7 @@ export function useEditorState({
   const dragStartItemsRef = useRef<CanvasItem[] | null>(null);
 
   // --- Tags drawer visibility ---
-  const [tagsOpen, setTagsOpen] = useState(true);
-  useEffect(() => {
-    const v = localStorage.getItem('tagsOpen');
-    if (v !== null) setTagsOpen(v === '1');
-  }, []);
-  useEffect(() => {
-    localStorage.setItem('tagsOpen', tagsOpen ? '1' : '0');
-  }, [tagsOpen]);
+  const [tagsOpen, setTagsOpen] = useState(false);
 
   // --- Data loading ---
   useEffect(() => {

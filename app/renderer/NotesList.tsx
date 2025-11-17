@@ -86,7 +86,7 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
   return (
     <div
       style={{
-        width: collapsed ? 56 : 360,
+        width: collapsed ? 46 : 380,
         transition: 'width 160ms ease',
         background: '#f8f8f8',
         boxShadow: 'inset -1px 0 0 rgba(0,0,0,0.06)',
