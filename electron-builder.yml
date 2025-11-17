@@ -1,8 +1,7 @@
 appId: com.smartnote.desktop
 productName: SmartNote
 files:
-  - 'build/main/**/*'
-  - 'build/preload/**/*'
+  - 'build/**/*'
   - 'dist/**/*'
   - 'package.json'
 directories:

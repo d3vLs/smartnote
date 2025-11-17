@@ -140,7 +140,7 @@ function createWindow() {
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
     // Renderer output is copied to build/main/dist by the build pipeline
-    win.loadFile(path.join(__dirname, 'dist/index.html'));
+    win.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 }
 
