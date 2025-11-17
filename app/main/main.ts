@@ -126,6 +126,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200,
     height: 800,
+
     minWidth: 1130, // prevent too-small UI that would break layout
     minHeight: 660,
     webPreferences: {
@@ -136,6 +137,7 @@ function createWindow() {
   });
 
   win.setMenu(null);
+  win.maximize();
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
