@@ -95,7 +95,7 @@ export function useEditorState({
 
   // --- Canvas and in-progress stroke ---
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+
   const drawing = useRef<Stroke | null>(null);
 
   // --- Selection and pointer state ---
@@ -335,17 +335,16 @@ export function useEditorState({
   // --- Canvas sizing and DPR ---
   useEffect(() => {
     const canvas = canvasRef.current;
-    const container = containerRef.current; // <-- Get the container
-    if (!canvas || !container) return;
+    if (!canvas) return; // Only need the canvas
 
     // This is our resize logic
     const setup = () => {
       const dpr = window.devicePixelRatio || 1;
-      const rect = container.getBoundingClientRect(); // <-- Use container's rect
+      const rect = canvas.getBoundingClientRect(); // <-- Use canvas's own rect
       const cssWidth = rect.width;
       const cssHeight = rect.height;
 
-      // Only resize if needed, to avoid unnecessary repaints
+      // Only resize if needed
       if (
         canvas.width !== Math.round(cssWidth * dpr) ||
         canvas.height !== Math.round(cssHeight * dpr)
@@ -361,11 +360,11 @@ export function useEditorState({
       repaint(); // Repaint after resizing
     };
 
-    // Create an observer to watch the container
+    // Create an observer to watch the canvas itself
     const observer = new ResizeObserver(() => {
-      setup(); // Run setup logic on *any* size change
+      setup(); // Run our setup logic on *any* size change
     });
-    observer.observe(container); // Start watching
+    observer.observe(canvas); // Start watching the canvas
 
     // Cleanup
     return () => {
@@ -944,7 +943,6 @@ export function useEditorState({
     items,
     setItems,
     canvasRef,
-    containerRef,
     drawing,
     folders,
     folderId,

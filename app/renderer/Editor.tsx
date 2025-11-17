@@ -23,7 +23,6 @@ export function Editor({
     items,
     setItems,
     canvasRef,
-    containerRef,
     folders,
     folderId,
     setFolderId,
@@ -101,7 +100,6 @@ export function Editor({
       {/* Workspace: canvas + right tags drawer */}
       <div style={{ display: 'flex', height: '100%' }}>
         <div
-          ref={containerRef}
           style={{
             flex: 1,
             position: 'relative',
@@ -205,15 +203,9 @@ export function Editor({
               const scale = canvasRef.current
                 ? parseFloat(canvas?.style.transform || 'scale(1)'.split('(')[1]) || 1
                 : 1;
-              const offset = { x: 0, y: 0 }; // Simplified: you'd get this from the hook's ref
+              const offset = { x: 0, y: 0 };
 
-              // We need to get the latest scale/offset without causing re-renders
-              // This part is tricky and shows why state management is complex.
-              // For simplicity, let's assume `useEditorState` also returns `scaleRef` and `offsetRef`
-              // Let's go back and add scaleRef and offsetRef to the return
-              // ... (Assuming useEditorState returns scaleRef and offsetRef)
-
-              // Let's just use the state values for positioning
+              // use the state values for positioning
               const left = rect ? it.x * scale + offset.x : it.x;
               const top = rect ? it.y * scale + offset.y : it.y;
               const width = it.w * scale;
@@ -258,7 +250,7 @@ export function Editor({
               transform: 'translateX(-50%)',
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
+              gap: 12,
               padding: 10,
               background: 'rgba(255,255,255,0.92)',
               borderRadius: 12,
@@ -267,7 +259,7 @@ export function Editor({
               zIndex: 3,
             }}
           >
-            <div style={{ display: 'flex', gap: 8, pointerEvents: 'auto' }}>
+            <div style={{ display: 'flex', gap: 10, pointerEvents: 'auto' }}>
               <button
                 title="Pen (P)"
                 onClick={() => setTool('pen')}
@@ -287,7 +279,7 @@ export function Editor({
                 onClick={() => setTool('select')}
                 style={{ opacity: tool === 'select' ? 1 : 0.7 }}
               >
-                ▭
+                🖐🏼
               </button>
               <button
                 title="Erase (E)"
@@ -340,7 +332,7 @@ export function Editor({
         {/* Collapsible tags drawer */}
         <div
           style={{
-            width: tagsOpen ? 260 : 0,
+            width: tagsOpen ? 280 : 0,
             transition: 'width 160ms ease',
             borderLeft: tagsOpen ? '1px solid #e5e5e5' : 'none',
             overflow: 'hidden',
