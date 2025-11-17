@@ -95,6 +95,7 @@ export function useEditorState({
 
   // --- Canvas and in-progress stroke ---
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const drawing = useRef<Stroke | null>(null);
 
   // --- Selection and pointer state ---
@@ -340,24 +341,43 @@ export function useEditorState({
 
   // --- Canvas sizing and DPR ---
   useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current; // <-- Get the container
+    if (!canvas || !container) return;
+
+    // This is our resize logic
     const setup = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
       const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      const cssWidth = rect.width || 800;
-      const cssHeight = rect.height || 600;
-      canvas.width = Math.round(cssWidth * dpr);
-      canvas.height = Math.round(cssHeight * dpr);
+      const rect = container.getBoundingClientRect(); // <-- Use container's rect
+      const cssWidth = rect.width;
+      const cssHeight = rect.height;
+
+      // Only resize if needed, to avoid unnecessary repaints
+      if (
+        canvas.width !== Math.round(cssWidth * dpr) ||
+        canvas.height !== Math.round(cssHeight * dpr)
+      ) {
+        canvas.width = Math.round(cssWidth * dpr);
+        canvas.height = Math.round(cssHeight * dpr);
+      }
+
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
       }
-      repaint();
+      repaint(); // Repaint after resizing
     };
-    setup();
-    window.addEventListener('resize', setup);
-    return () => window.removeEventListener('resize', setup);
+
+    // Create an observer to watch the container
+    const observer = new ResizeObserver(() => {
+      setup(); // Run setup logic on *any* size change
+    });
+    observer.observe(container); // Start watching
+
+    // Cleanup
+    return () => {
+      observer.disconnect(); // Stop watching when component unmounts
+    };
   }, [repaint]);
 
   // --- Coordinate transforms ---
@@ -931,6 +951,7 @@ export function useEditorState({
     items,
     setItems,
     canvasRef,
+    containerRef,
     drawing,
     folders,
     folderId,

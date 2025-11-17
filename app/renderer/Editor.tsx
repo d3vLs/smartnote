@@ -23,6 +23,7 @@ export function Editor({
     items,
     setItems,
     canvasRef,
+    containerRef,
     folders,
     folderId,
     setFolderId,
@@ -100,6 +101,7 @@ export function Editor({
       {/* Workspace: canvas + right tags drawer */}
       <div style={{ display: 'flex', height: '100%' }}>
         <div
+          ref={containerRef}
           style={{
             flex: 1,
             position: 'relative',
