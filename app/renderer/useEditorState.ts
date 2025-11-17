@@ -128,6 +128,11 @@ export function useEditorState({
   const [editingTextIdx, setEditingTextIdx] = useState<number | null>(null);
   const textOverlayRef = useRef<HTMLTextAreaElement>(null);
 
+  // --- Refs for Dragging Items ---
+  const draggingItemsRef = useRef(false);
+  const dragStartPointRef = useRef({ x: 0, y: 0 });
+  const dragStartItemsRef = useRef<CanvasItem[] | null>(null);
+
   // --- Tags drawer visibility ---
   const [tagsOpen, setTagsOpen] = useState(true);
   useEffect(() => {
@@ -384,6 +389,32 @@ export function useEditorState({
     }
   }, [tool, penColor, penWidth, pushHistory]);
 
+  // --- Geometry helpers ---
+  const eraseAtPoint = useCallback(
+    (x: number, y: number) => {
+      const threshold = 8;
+      const before = itemsRef.current;
+      const next = before.filter((it) => {
+        if (it.kind === 'text') {
+          return !(x >= it.x && x <= it.x + it.w && y >= it.y && y <= it.y + it.h);
+        }
+        for (let i = 1; i < it.points.length; i++) {
+          const p1 = it.points[i - 1],
+            p2 = it.points[i];
+          const dist = pointNearSegment(x, y, p1.x, p1.y, p2.x, p2.y);
+          if (dist <= threshold) return false;
+        }
+        return true;
+      });
+      if (next.length !== before.length) {
+        pushHistory(before.slice());
+        itemsRef.current = next;
+        setItems(next);
+      }
+    },
+    [pushHistory]
+  );
+
   // --- Pointer handlers ---
   const onCanvasPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -417,6 +448,40 @@ export function useEditorState({
       }
 
       if (tool === 'select') {
+        // Check for click on a selected item FIRST
+        let hitId: number | undefined = undefined;
+        for (let i = itemsRef.current.length - 1; i >= 0; i--) {
+          const it = itemsRef.current[i];
+          // ... (same hit-testing logic from onCanvasPointerUp) ...
+          if (it.kind === 'text') {
+            if (p.x >= it.x && p.x <= it.x + it.w && p.y >= it.y && p.y <= it.y + it.h) {
+              hitId = i;
+              break;
+            }
+          } else {
+            for (let j = 1; j < it.points.length; j++) {
+              const p1 = it.points[j - 1],
+                p2 = it.points[j];
+              const dist = pointNearSegment(p.x, p.y, p1.x, p1.y, p2.x, p2.y);
+              if (dist <= 8) {
+                hitId = i;
+                break;
+              }
+            }
+            if (hitId !== undefined) break;
+          }
+        }
+
+        if (hitId !== undefined && selectedIdx.includes(hitId)) {
+          // Clicked on an already-selected item, start dragging
+          draggingItemsRef.current = true;
+          dragStartPointRef.current = p;
+          // Save the original state *before* the drag
+          dragStartItemsRef.current = snapshotClone(itemsRef.current);
+          return; // Do not start marquee
+        }
+
+        // Clicked on empty space or an unselected item, start marquee
         selectionStartRef.current = { x: p.x, y: p.y };
         selectionDraggingRef.current = false;
         setSelectionRect(null);
@@ -453,11 +518,53 @@ export function useEditorState({
         return;
       }
     },
-    [editingTextIdx, tool, toCanvasPoint, finalizeStroke, penColor, penWidth, repaint, pushHistory]
+    [
+      editingTextIdx,
+      tool,
+      toCanvasPoint,
+      finalizeStroke,
+      penColor,
+      penWidth,
+      repaint,
+      eraseAtPoint,
+      pushHistory,
+      selectedIdx,
+      snapshotClone,
+    ]
   );
 
   const onCanvasPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (draggingItemsRef.current) {
+        const p = toCanvasPoint(e);
+        const start = dragStartPointRef.current;
+        const dx = p.x - start.x;
+        const dy = p.y - start.y;
+        const originalItems = dragStartItemsRef.current;
+        if (!originalItems) return;
+
+        const nextItems = originalItems.map((item, i) => {
+          if (!selectedIdx.includes(i)) {
+            return item; // Not selected, return as-is
+          }
+
+          if (item.kind === 'text') {
+            return { ...item, x: item.x + dx, y: item.y + dy };
+          } else {
+            // It's a stroke, move all its points
+            return {
+              ...item,
+              points: item.points.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy })),
+            };
+          }
+        });
+
+        itemsRef.current = nextItems;
+        setItems(nextItems);
+        repaint(); // Show live dragging
+        return; // Don't do other move logic
+      }
+
       if (panningRef.current && panStartRef.current && panOriginRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -503,12 +610,20 @@ export function useEditorState({
         return;
       }
     },
-    [tool, toCanvasPoint, repaint]
+    [tool, toCanvasPoint, repaint, eraseAtPoint, selectedIdx]
   );
 
   const onCanvasPointerUp = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
+
+      if (draggingItemsRef.current) {
+        if (dragStartItemsRef.current) {
+          pushHistory(dragStartItemsRef.current); // Push the state *before* the drag
+        }
+        draggingItemsRef.current = false;
+        dragStartItemsRef.current = null;
+      }
 
       if (panningRef.current) {
         panningRef.current = false;
@@ -601,7 +716,7 @@ export function useEditorState({
         selectionStartRef.current = null;
       }
     },
-    [tool, finalizeStroke, selectionRect, toCanvasPoint]
+    [tool, finalizeStroke, selectionRect, toCanvasPoint, toCanvasPoint, pushHistory]
   );
 
   const onCanvasPointerCancel = useCallback(
@@ -725,32 +840,6 @@ export function useEditorState({
       selectionStartRef.current = null;
     }
   }, [tool]);
-
-  // --- Geometry helpers ---
-  const eraseAtPoint = useCallback(
-    (x: number, y: number) => {
-      const threshold = 8;
-      const before = itemsRef.current;
-      const next = before.filter((it) => {
-        if (it.kind === 'text') {
-          return !(x >= it.x && x <= it.x + it.w && y >= it.y && y <= it.y + it.h);
-        }
-        for (let i = 1; i < it.points.length; i++) {
-          const p1 = it.points[i - 1],
-            p2 = it.points[i];
-          const dist = pointNearSegment(x, y, p1.x, p1.y, p2.x, p2.y);
-          if (dist <= threshold) return false;
-        }
-        return true;
-      });
-      if (next.length !== before.length) {
-        pushHistory(before.slice());
-        itemsRef.current = next;
-        setItems(next);
-      }
-    },
-    [pushHistory]
-  );
 
   // --- Zoom (Ctrl/Cmd + Wheel) ---
   useEffect(() => {
