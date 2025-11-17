@@ -619,7 +619,7 @@ export function useEditorState({
         const sel: number[] = [];
         itemsRef.current.forEach((it, i) => {
           if (it.kind === 'text') {
-            if (it.x >= rx && it.y >= ry && it.x + it.w <= rx + rw && it.y + it.h <= ry + rh)
+            if (it.x + it.w >= rx && it.x <= rx + rw && it.y + it.h >= ry && it.y <= ry + rh)
               sel.push(i);
           } else {
             const b = strokeBounds(it);
