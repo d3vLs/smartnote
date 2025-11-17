@@ -51,9 +51,11 @@ function strokeBounds(st: Stroke) {
 export function useEditorState({
   noteId,
   onSaved,
+  folders,
 }: {
   noteId: number | null;
   onSaved: (id: number) => void;
+  folders: Folder[];
 }) {
   // --- UI: transient "Saved" toast ---
   const [savedToast, setSavedToast] = useState<{ visible: boolean; text: string }>({
@@ -121,7 +123,6 @@ export function useEditorState({
   const panOriginRef = useRef<{ x: number; y: number } | null>(null);
 
   // --- Folders (header move-to dropdown) ---
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [folderId, setFolderId] = useState<number | null>(null);
 
   // --- Text editing state ---
@@ -138,9 +139,9 @@ export function useEditorState({
   const [tagsOpen, setTagsOpen] = useState(false);
 
   // --- Data loading ---
-  useEffect(() => {
-    (async () => setFolders(await window.api.listFolders()))();
-  }, []);
+  // useEffect(() => {
+  //   (async () => setFolders(await window.api.listFolders()))();
+  // }, []);
 
   useEffect(() => {
     const load = async () => {
