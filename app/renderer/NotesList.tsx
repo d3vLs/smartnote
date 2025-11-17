@@ -24,11 +24,20 @@ type Folder = { folderId: number; name: string };
  * - onOpen: open an existing note in the editor
  * - onNew: start a new note (editor will show empty canvas)
  */
-export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onNew: () => void }) {
+export function NotesList({
+  onOpen,
+  onNew,
+  folders,
+  refreshFolders,
+}: {
+  onOpen: (id: number) => void;
+  onNew: () => void;
+  folders: Folder[];
+  refreshFolders: () => Promise<void>;
+}) {
   // Data state
   const [items, setItems] = useState<NoteRow[]>([]);
   const [q, setQ] = useState('');
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [activeFolder, setActiveFolder] = useState<number | null>(null);
 
   // UI state
@@ -42,8 +51,6 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
   async function refresh() {
     const res = await window.api.searchNotes({ q, folderId: activeFolder });
     setItems(res);
-    const fs = await window.api.listFolders();
-    setFolders(fs);
   }
   useEffect(() => {
     refresh();
@@ -54,7 +61,7 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
     if (!newFolder.trim()) return;
     await window.api.createFolder(newFolder.trim());
     setNewFolder('');
-    await refresh();
+    await refreshFolders();
   }
 
   /** Delete a note (hard) with confirmation; refresh list afterwards. */
@@ -198,6 +205,7 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
                   }
                   await window.api.deleteFolderHard(fid);
                   closeMenu(menu);
+                  await refreshFolders();
                   await refresh();
                   setActiveFolder(null);
                 }}

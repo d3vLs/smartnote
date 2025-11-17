@@ -1,14 +1,16 @@
 // app/renderer/Editor.tsx
 import { TagManager } from './TagManager';
 import { useEditorState } from './useEditorState';
-import type { TextBox } from '../common/types';
+import type { Folder, TextBox } from '../common/types';
 
 export function Editor({
   noteId,
   onSaved,
+  folders,
 }: {
   noteId: number | null;
   onSaved: (id: number) => void;
+  folders: Folder[];
 }) {
   const {
     savedToast,
@@ -23,7 +25,6 @@ export function Editor({
     items,
     setItems,
     canvasRef,
-    folders,
     folderId,
     setFolderId,
     editingTextIdx,
@@ -38,7 +39,7 @@ export function Editor({
     exportPDF,
     save,
     itemsRef,
-  } = useEditorState({ noteId, onSaved });
+  } = useEditorState({ noteId, onSaved, folders });
 
   return (
     <div
