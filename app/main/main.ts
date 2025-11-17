@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import path from 'node:path';
 
-import { openDb } from '../repo/db';
+import { openDb, getDb } from '../repo/db';
 import { migrate } from '../repo/schema';
 import { TagRepository } from '../repo/tags';
 import { FolderRepository } from '../repo/folders';
@@ -222,7 +222,7 @@ async function bootstrap() {
   // Delete a note (FK cascade removes NoteTags)
   ipcMain.handle('notes:delete', (_e, noteId: number) => {
     // TODO: Replace require(...) with static import getDb() to be bundle-safe in prod builds.
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     db.prepare('DELETE FROM Notes WHERE noteId = ?').run(noteId);
   });
 
@@ -232,35 +232,40 @@ async function bootstrap() {
 
   // Assign/remove tag link (NoteTags)
   ipcMain.handle('tags:assign', (_e, { noteId, tagId }) => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     db.prepare('INSERT OR IGNORE INTO NoteTags(noteId, tagId) VALUES (?,?)').run(noteId, tagId);
   });
   ipcMain.handle('tags:remove', (_e, { noteId, tagId }) => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     db.prepare('DELETE FROM NoteTags WHERE noteId = ? AND tagId = ?').run(noteId, tagId);
   });
 
   // List all tags (for TagManager’s global suggestions)
   ipcMain.handle('tags:list', () => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     return db.prepare('SELECT tagId, name FROM Tags ORDER BY name').all();
   });
 
   // Add tag to a note by name (idempotent)
   ipcMain.handle('tags:addToNote', (_e, { noteId, name }: { noteId: number; name: string }) => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     // Insert if not exists (SQLite UPSERT via ON CONFLICT DO NOTHING)
     db.prepare('INSERT INTO Tags (name) VALUES (?) ON CONFLICT(name) DO NOTHING').run(name);
-    const tag = db.prepare('SELECT tagId, name FROM Tags WHERE name = ?').get(name);
-    db.prepare('INSERT OR IGNORE INTO NoteTags (noteId, tagId) VALUES (?, ?)').run(
-      noteId,
-      tag.tagId
-    );
+    const tag = db.prepare('SELECT tagId, name FROM Tags WHERE name = ?').get(name) as
+      | { tagId: number; name: string }
+      | undefined;
+
+    if (tag) {
+      db.prepare('INSERT OR IGNORE INTO NoteTags (noteId, tagId) VALUES (?, ?)').run(
+        noteId,
+        tag.tagId
+      );
+    }
   });
 
   // Tags for a single note (join table)
   ipcMain.handle('tags:forNote', (_e, noteId: number) => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     return db
       .prepare(
         `
@@ -285,7 +290,7 @@ async function bootstrap() {
   ipcMain.handle(
     'notes:moveToFolder',
     (_e, { noteId, folderId }: { noteId: number; folderId: number | null }) => {
-      const db = (require('../repo/db') as any).getDb();
+      const db = getDb();
       db.prepare(
         'UPDATE Notes SET folderId = ?, updatedAt = CURRENT_TIMESTAMP WHERE noteId = ?'
       ).run(folderId, noteId);
@@ -294,7 +299,7 @@ async function bootstrap() {
 
   // Hard-delete a folder: first move its notes to "No Folder" (NULL), then delete the folder itself
   ipcMain.handle('folders:deleteHard', (_e, folderId: number) => {
-    const db = (require('../repo/db') as any).getDb();
+    const db = getDb();
     const tx = db.transaction((fid: number) => {
       db.prepare(
         'UPDATE Notes SET folderId = NULL, updatedAt = CURRENT_TIMESTAMP WHERE folderId = ?'
