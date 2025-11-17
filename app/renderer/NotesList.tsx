@@ -170,7 +170,7 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
                 borderRadius: 6,
                 boxShadow: '0 6px 18px rgba(0,0,0,0.1)',
                 zIndex: 10,
-                minWidth: 160,
+                minWidth: 100,
                 padding: 6,
               }}
               onMouseLeave={(e) => closeMenu(e.currentTarget)}
@@ -178,7 +178,7 @@ export function NotesList({ onOpen, onNew }: { onOpen: (id: number) => void; onN
               <button
                 style={{
                   width: '100%',
-                  textAlign: 'left',
+                  textAlign: 'center',
                   padding: '6px 8px',
                   background: 'transparent',
                   border: 'none',
