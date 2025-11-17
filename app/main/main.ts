@@ -226,6 +226,8 @@ async function bootstrap() {
     // TODO: Replace require(...) with static import getDb() to be bundle-safe in prod builds.
     const db = getDb();
     db.prepare('DELETE FROM Notes WHERE noteId = ?').run(noteId);
+    win?.blur();
+    win?.webContents.focus();
   });
 
   // 5) IPC: Tags
@@ -309,6 +311,8 @@ async function bootstrap() {
       db.prepare('DELETE FROM Folders WHERE folderId = ?').run(fid);
     });
     tx(folderId);
+    win?.blur();
+    win?.webContents.focus();
   });
 
   // 7) Create the main application window last (after handlers are ready)

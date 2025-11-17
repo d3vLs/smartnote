@@ -29,11 +29,13 @@ export function NotesList({
   onNew,
   folders,
   refreshFolders,
+  refreshKey,
 }: {
   onOpen: (id: number) => void;
   onNew: () => void;
   folders: Folder[];
   refreshFolders: () => Promise<void>;
+  refreshKey: number;
 }) {
   // Data state
   const [items, setItems] = useState<NoteRow[]>([]);
@@ -54,7 +56,7 @@ export function NotesList({
   }
   useEffect(() => {
     refresh();
-  }, [q, activeFolder]);
+  }, [q, activeFolder, refreshKey]);
 
   /** Create a folder from input; no-op on empty names; refresh after create. */
   async function createFolder() {

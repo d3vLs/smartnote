@@ -26,6 +26,14 @@ export default function App() {
     refreshFolders();
   }, [refreshFolders]);
 
+  const [noteListKey, setNoteListKey] = useState(0); // This is our "refresh trigger"
+
+  // Create a new handler for the Editor's onSaved prop
+  const handleNoteSave = useCallback((id: number) => {
+    setCurrentNoteId(id); // 1. Set the active note
+    setNoteListKey((key) => key + 1); // 2. Trigger the refresh
+  }, []);
+
   return (
     <div style={{ display: 'flex', height: '100vh' }}>
       {/* Sidebar: searching, filtering, and selecting notes */}
@@ -34,12 +42,13 @@ export default function App() {
         onNew={() => setCurrentNoteId(null)} // start new note (editor shows empty canvas)
         folders={folders}
         refreshFolders={refreshFolders}
+        refreshKey={noteListKey}
       />
 
       {/* Editor: canvas + tags drawer; saves propagate selected note id back up */}
       <Editor
         noteId={currentNoteId}
-        onSaved={setCurrentNoteId} // after insert or update, ensure selection reflects the saved id
+        onSaved={handleNoteSave} // after insert or update, ensure selection reflects the saved id
         folders={folders}
       />
     </div>
