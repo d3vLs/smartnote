@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-
+import type { SaveNoteInput, SearchCriteria, CanvasItem } from '../common/types';
 /**
  * Preload (isolated world):
  * - Exposes a minimal, typed API on window.api for the renderer.
@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('api', {
    * payload.strokes contains both strokes and text objects.
    * payload.crop is a tight bounding rect (world coords) computed in the renderer.
    */
-  exportPDF: (payload: { title: string; strokes: any[]; crop: CropRect }) =>
+  exportPDF: (payload: { title: string; strokes: CanvasItem[]; crop: CropRect }) =>
     ipcRenderer.invoke('notes:exportPDF', payload),
 
   // --- Notes ------------------------------------------------------------------------------------
@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('api', {
    * Save note (insert or update).
    * Returns noteId (new or existing), unified by the main service.
    */
-  saveNote: (input: any) => ipcRenderer.invoke('notes:save', input),
+  saveNote: (input: SaveNoteInput) => ipcRenderer.invoke('notes:save', input),
 
   /** Fetch a single note by id. */
   getNote: (noteId: number) => ipcRenderer.invoke('notes:get', noteId),
@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld('api', {
    * Search notes.
    * criteria can include: q (string), folderId (number|null), tagIds (number[]), order, limit, offset.
    */
-  searchNotes: (criteria: any) => ipcRenderer.invoke('notes:search', criteria),
+  searchNotes: (criteria: SearchCriteria) => ipcRenderer.invoke('notes:search', criteria),
 
   /** Permanently delete a note. */
   deleteNote: (noteId: number) => ipcRenderer.invoke('notes:delete', noteId),

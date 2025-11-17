@@ -1,13 +1,29 @@
-export interface StrokePoint {
+export type StrokePoint = {
   x: number;
   y: number;
   t?: number;
-}
-export interface Stroke {
+};
+export type Stroke = {
+  kind: 'stroke';
   points: StrokePoint[];
   color: string;
   width: number;
-}
+};
+
+export type TextBox = {
+  kind: 'text';
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text: string;
+  font: string;
+  color: string;
+  align: 'left' | 'center' | 'right';
+};
+
+export type CanvasItem = Stroke | TextBox;
 
 export interface Note {
   noteId: number;
@@ -40,7 +56,7 @@ export interface Folder {
 }
 
 export interface NoteDTO extends Omit<Note, 'strokesJSON'> {
-  strokes: Stroke[];
+  strokes: CanvasItem[];
 }
 export interface NoteSummaryDTO {
   noteId: number;
@@ -54,7 +70,7 @@ export interface SaveNoteInput {
   noteId?: number;
   title: string;
   content?: string;
-  strokes: Stroke[];
+  strokes: CanvasItem[];
   folderId?: number | null;
   tagNames?: string[];
 }
